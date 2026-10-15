@@ -1,0 +1,1078 @@
+ticket_id,source,category,subject_title,user_problem_description,error_logs_and_telemetry,accepted_resolution,tags,token_estimate
+IT-000001,serverfault,Web & Reverse Proxy,"In Nginx, how can I rewrite all http requests to https while maintaining sub-domain?","I want to rewrite all http requests on my web server to be https requests, I started with the following: One Problem is that this strips away any subdomain information (e.g., node1.mysite.com/folder), how could I rewrite the above to reroute everything to https and maintain the sub-domain?","server {
+    listen      80;
+
+    location / {
+      rewrite     ^(.*)   https://mysite.com$1 permanent;
+    }
+...","Correct way in new versions of nginx Turn out my first answer to this question was correct at certain time, but it turned into another pitfall - to stay up to date please check Taxing rewrite pitfalls
+
+[Remediation Script / Config]:
+## Redirect all HTTP traffic to HTTPS
+server {
+  listen          [::]:80 default_server;
+  listen               80 default_server;
+  server_name     _;
+  return          307 https://$host$request_uri;
+}
+
+server {
+  listen         443 ssl http2 quic;
+  server_name    my.domain.com;
+
+  # add Strict-Transport-Security to prevent man in the middle attacks
+  add_header Strict-Transport-Security ""max-age=31536000"" always; 
+
+  ...
+}","nginx, redirect, https",209
+IT-000002,serverfault,Web & Reverse Proxy,How can I use environment variables in Nginx.conf,"I have a docker container running Nginx, that links to another docker container. The host name and IP address of the second container is loaded into the Nginx container as environment variables on startup, but is not know before then (it's dynamic). I want my nginx.conf to use these values - e.g. How can I get environment variables into the Nginx configuration on startup? EDIT 1 This is the entire file, after the suggested answer below: Reloading nginx then errors: EDIT 2: more details Current environment variables Root nginx.conf: Site nginx configuration: Reload nginx configuration:","upstream gunicorn {
+    server $APP_HOST_NAME:$APP_HOST_PORT;
+}
+---
+env APP_WEB_1_PORT_5000_TCP_ADDR;
+# Nginx host configuration for django_app
+
+# Django app is served by Gunicorn, running under port 5000 (via Foreman)
+upstream gunicorn {
+    server $ENV{""APP_WEB_1_PORT_5000_TCP_ADDR""}:5000;
+}
+
+server {
+    listen 80;
+
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log;
+
+    location /static/ {
+        alias /app/static/;
+    }
+    location /media/ {
+        alias /app/media/;
+    }
+    location / {
+        proxy_pass http://gunicorn;
+    }
+}
+---
+$ nginx -s reload
+nginx: [emerg] unknown directive ""env"" in /etc/nginx/sites-enabled/default:1
+---
+root@87ede56e0b11:/# env | grep APP_WEB_1
+APP_WEB_1_NAME=/furious_turing/app_web_1
+APP_WEB_1_PORT=tcp://172.17.0.63:5000
+APP_WEB_1_PORT_5000_TCP=tcp://172.17.0.63:5000
+APP_WEB_1_PORT_5000_TCP_PROTO=tcp
+APP_WEB_1_PORT_5000_TCP_PORT=5000
+APP_WEB_1_PORT_5000_TCP_ADDR=172.17.0.63
+---
+root@87ede56e0b11:/# head /etc/nginx/nginx.conf
+user www-data;
+worker_processes 4;
+pid /var/run/nginx.pid;
+env APP_WEB_1_PORT_5000_TCP_ADDR;
+---
+root@87ede56e0b11:/# head /etc/nginx/sites-available/default
+# Django app is served by Gunicorn, running under port 5000 (via Foreman)
+upstream gunicorn {
+    server $ENV{""APP_WEB_1_PORT_5000_TCP_ADDR""}:5000;
+}
+
+server {
+    listen 80;
+---
+root@87ede56e0b11:/# nginx -s reload
+nginx: [emerg] directive ""server"" is not terminated by "";"" in /etc/nginx/sites-enabled/default:3","Here another one with envsubst. nginx docker image already runs envsubst through /docker-entrypoint.d/20-envsubst-on-templates.sh . You only need to place a template file in the right place: /etc/nginx/templates/my-file.conf.template (note: the file must have .template extension!). Then, you can create a dedicated template file only for variables with one or more map clauses that we will use as our custom variables. You must choose a name for the conf.d file so that it is the first one that nginx takes. This is the basic concept explained with docker-compose and three files: docker-compose.yml : template-variables : nginx.conf :
+
+[Remediation Script / Config]:
+version: ""3.9""
+services:
+  nginx:
+    image: nginx:1.23
+    volumes:
+        - ./template-variables:/etc/nginx/templates/10-variables.conf.template:ro
+
+    environment:
+        EXTERNAL_IP: ""1.2.3.4""
+---
+map $host $external_ip {
+  default ""$EXTERNAL_IP"";
+}
+---
+server {
+     location / {
+
+          proxy_set_header X-Real-IP $external_ip;
+      }
+}","nginx, docker",484
+IT-000003,serverfault,Web & Reverse Proxy,Nginx reverse proxy + URL rewrite,"Nginx is running on port 80, and I'm using it to reverse proxy URLs with path /foo to port 3200 this way: This works fine, but I have an application on port 3200 , for which I don't want the initial /foo to be sent to. That is - when I access http://localhost/foo/bar , I want only /bar to be the path as received by the app. So I tried adding this line to the location block above: This causes 302 redirect (change in URL), but I want 301. What should I do?","location /foo {
+                proxy_pass http://localhost:3200;
+                proxy_redirect     off;
+                proxy_set_header   Host $host;
+}
+---
+rewrite ^(.*)foo(.*)$ http://localhost:3200/$2 permanent;","Any redirect to localhost doesn't make sense from a remote system (e.g. client's Web browser). So the rewrite flags permanent (301) or redirect (302) are not usable in your case. Please try following setup using a transparent rewrite rule: Use curl -i to test your rewrites. A very subtle change to the rule can cause nginx to perform a redirect.
+
+[Remediation Script / Config]:
+location  /foo {
+  rewrite /foo/(.*) /$1  break;
+  proxy_pass         http://localhost:3200;
+  proxy_redirect     off;
+  proxy_set_header   Host $host;
+}","nginx, reverse-proxy, 301-redirect",252
+IT-000004,serverfault,Web & Reverse Proxy,Why do I need Nginx and something like Gunicorn?,"I'm looking for an overly simplified answer to the following question. I'm trying to build a foundational understanding of how Nginx works alongside something like Gunicorn. Do I need both Nginx and something like Gunicorn to deploy Django apps on Nginx? If so, what actually handles the HTTP requests? Ps. I don't want to use Apache and mod_wsgi!",No explicit stack trace attached.,"Overly simplified: You need something that executes Python but Python isn't the best at handling all types of requests. [disclaimer: I'm a Gunicorn developer] Less simplified: Regardless of what app server you use (Gunicorn, mod_wsgi, mod_uwsgi, cherrypy) any sort of non-trivial deployment will have something upstream that will handle the requests that your Django app should not be handling. Trivial examples of such requests are serving static assets (images/css/js). This results in two first tiers of the classic ""three tier architecture"". Ie, the webserver (Nginx in your case) will handle many requests for images and static resources. Requests that need to be dynamically generated will then be passed on to the application server (Gunicorn in your example). (As an aside, the third of the three tiers is the database) Historically speaking, each of these tiers would be hosted on separate machines (and there would most likely be multiple machines in the first two tiers, ie: 5 web servers dispatch requests to two app servers which in turn query a single database). In the modern era we now have applications of all shapes and sizes. Not every weekend project or small business site actually needs the horsepower of multiple machines and will run quite happily on a single box. This has spawned new entries into the array of hosting solutions. Some solutions will marry the app server to the web server (Apache httpd + mod_wsgi, Nginx + mod_uwsgi, etc). And its not at all uncommon to host the database on the same machine as one of these web/app server combinations. Now in the case of Gunicorn, we made a specific decision (copying from Ruby's Unicorn) to keep things separate from Nginx while relying on Nginx's proxying behavior. Specifically, if we can assume that Gunicorn will never read connections directly from the internet, then we don't have to worry about clients that are slow. This means that the processing model for Gunicorn is embarrassingly simple. The separation also allows Gunicorn to be written in pure Python which minimizes the cost of development while not significantly impacting performance. It also allows users the ability to use other proxies (assuming they buffer correctly). As to your second question about what actually handles the HTTP request, the simple answer is Gunicorn. The complete answer is both Nginx and Gunicorn handle the request. Basically, Nginx will receive the request and if it's a dynamic request (generally based on URL patterns) then it will give that request to Gunicorn, which will process it, and then return a response to Nginx which then forwards the response back to the original client. So in closing, yes. You need both Nginx and Gunicorn (or something similar) for a proper Django deployment. If you're specifically looking to host Django with Nginx, then I would investigate Gunicorn, mod_uwsgi, and maybe CherryPy as candidates for the Django side of things.","nginx, django",707
+IT-000005,serverfault,Web & Reverse Proxy,How do I add Access-Control-Allow-Origin in NGINX?,How do I set the Access-Control-Allow-Origin header so I can use web-fonts from my subdomain on my main domain? Notes: You'll find examples of this and other headers for most HTTP servers in the HTML5BP Server Configs projects https://github.com/h5bp/server-configs,No explicit stack trace attached.,"Nginx has to be compiled with http://wiki.nginx.org/NginxHttpHeadersModule (default on Ubuntu and some other Linux distros). Then you can do this
+
+[Remediation Script / Config]:
+location ~* \.(eot|ttf|woff|woff2)$ {
+    add_header Access-Control-Allow-Origin *;
+}","nginx, cors",101
+IT-000006,serverfault,Web & Reverse Proxy,Nginx config reload without downtime,I use nginx as a reverse proxy. Whenever I update the config for it using I face a brief downtime. How can I avoid that?,"sudo ""cp -r #{nginx_config_path}* /etc/nginx/sites-enabled/""
+sudo ""kill -s HUP `cat /var/run/nginx.pid`""","Run one of the following commands: service nginx reload systemctl reload nginx /etc/init.d/nginx reload /usr/sbin/nginx -s reload It will do a hot reload of the configuration without downtime. If you have pending requests, then there will be lingering nginx processes that will handle those connections before it dies, so it's an extremely graceful way to reload configs. Sometimes you may want to prepend with sudo",nginx,137
+IT-000007,serverfault,Web & Reverse Proxy,How to force or redirect to SSL in nginx?,I have a signup page on a subdomain like: https://signup.example.com It should only be accessible via HTTPS but I'm worried people might somehow stumble upon it via HTTP and get a 404. My html/server block in nginx looks like this: What can I add so that people who go to http://signup.example.com get redirected to https://signup.example.com ? (FYI I know there are Rails plugins that can force SSL but was hoping to avoid that),"html {
+  server {
+    listen 443;
+    server_name signup.example.com;
+
+    ssl                        on;
+    ssl_certificate        /path/to/my/cert;
+    ssl_certificate_key  /path/to/my/key;
+
+    ssl_session_timeout 30m;
+
+    location / {
+      root /path/to/my/rails/app/public;
+      index index.html;
+        passenger_enabled on;
+    }
+  }
+}","According to nginx pitfalls , it's slightly better to omit the unnecessary capture, using $request_uri instead. In that case, append a question mark to prevent nginx from doubling any query args.
+
+[Remediation Script / Config]:
+server {
+    listen      80;
+    server_name signup.mysite.com;
+    rewrite     ^   https://$server_name$request_uri? permanent;
+}","nginx, ssl, redirect, ruby-on-rails",202
+IT-000008,serverfault,Web & Reverse Proxy,nginx HTTPS serving with same config as HTTP,"Is there a way to share configuration directives across two nginx server {} blocks? I'd like to avoid duplicating the rules, as my site's HTTPS and HTTP content are served with the exact same config. Currently, it's like this: Can I do something along the lines of:","server {
+  listen 80;
+  ...
+}
+
+server {
+  listen 443;
+
+  ssl on; # etc.
+  ...
+}
+---
+server {
+  listen 80, 443;
+  ...
+
+  if(port == 443) {
+    ssl on; #etc
+  }
+}","You can combine this into one server block like so: Official How-To
+
+[Remediation Script / Config]:
+server {
+    listen 80;
+    listen 443 default_server ssl;
+
+    # other directives
+}","nginx, https",149
+IT-000009,serverfault,Web & Reverse Proxy,Nginx enable site command,"We all know how to enable a website using apache on Linux. I'm pretty sure that we all agree on using the a2ensite command. Unfortunately, there is no default equivalent command that comes with Nginx, but it did happen that I installed some package on ubuntu that allowed me to enable/disable sites and list them. The problem is I don't remember the name of this package. Does anybody know what I'm talking about? Please tell me the name of this package and the command name.",No explicit stack trace attached.,"Just create this script /usr/bin/nginx_modsite and make it executable with chmod 700 /usr/bin/nginx_modsite . How it works: To list all the sites To enable site ""test_website"" To disable site ""test_website""
+
+[Remediation Script / Config]:
+#!/bin/bash
+
+##
+#  File:
+#    nginx_modsite
+#  Description:
+#    Provides a basic script to automate enabling and disabling websites found
+#    in the default configuration directories:
+#      /etc/nginx/sites-available and /etc/nginx/sites-enabled
+#    For easy access to this script, copy it into the directory:
+#      /usr/local/sbin
+#    Run this script without any arguments or with -h or --help to see a basic
+#    help dialog displaying all options.
+##
+
+# Copyright (C) 2010 Michael Lustfield <mtecknology@ubuntu.com>
+
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED.  IN NO EVENT SHALL AUTHOR OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+# OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+# SUCH DAMAGE.
+
+##
+# Default Settings
+##
+
+NGINX_CONF_FILE=""$(awk -F= -v RS=' ' '/conf-path/ {print $2}' <<< $(nginx -V 2>&1))""
+NGINX_CONF_DIR=""${NGINX_CONF_FILE%/*}""
+NGINX_SITES_AVAILABLE=""$NGINX_CONF_DIR/sites-available""
+NGINX_SITES_ENABLED=""$NGINX_CONF_DIR/sites-enabled""
+SELECTED_SITE=""$2""
+
+##
+# Script Functions
+##
+
+ngx_enable_site() {
+    [[ ! ""$SELECTED_SITE"" ]] &&
+        ngx_select_site ""not_enabled""
+
+    [[ ! -e ""$NGINX_SITES_AVAILABLE/$SELECTED_SITE"" ]] && 
+        ngx_error ""Site does not appear to exist.""
+    [[ -e ""$NGINX_SITES_ENABLED/$SELECTED_SITE"" ]] &&
+        ngx_error ""Site appears to already be enabled""
+
+    ln -sf ""$NGINX_SITES_AVAILABLE/$SELECTED_SITE"" -T ""$NGINX_SITES_ENABLED/$SELECTED_SITE""
+    ngx_reload
+}
+
+ngx_disable_site() {
+    [[ ! ""$SELECTED_SITE"" ]] &&
+        ngx_select_site ""is_enabled""
+
+    [[ ! -e ""$NGINX_SITES_AVAILABLE/$SELECTED_SITE"" ]] &&
+        ngx_error ""Site does not appear to be \'available\'. - Not Removing""
+    [[ ! -e ""$NGINX_SITES_ENABLED/$SELECTED_SITE"" ]] &&
+        ngx_error ""Site does not appear to be enabled.""
+
+    rm -f ""$NGINX_SITES_ENABLED/$SELECTED_SITE""
+    ngx_reload
+}
+
+ngx_list_site() {
+    echo ""Available sites:""
+    ngx_sites ""available""
+    echo ""Enabled Sites""
+    ngx_sites ""enabled""
+}
+
+##
+# Helper Functions
+##
+
+ngx_select_site() {
+    sites_avail=($NGINX_SITES_AVAILABLE/*)
+    sa=""${sites_avail[@]##*/}""
+    sites_en=($NGINX_SITES_ENABLED/*)
+    se=""${sites_en[@]##*/}""
+
+    case ""$1"" in
+        not_enabled) sites=$(comm -13 <(printf ""%s\n"" $se) <(printf ""%s\n"" $sa));;
+        is_enabled) sites=$(comm -12 <(printf ""%s\n"" $se) <(printf ""%s\n"" $sa));;
+    esac
+
+    ngx_prompt ""$sites""
+}
+
+ngx_prompt() {
+    sites=($1)
+    i=0
+
+    echo ""SELECT A WEBSITE:""
+    for site in ${sites[@]}; do
+        echo -e ""$i:\t${sites[$i]}""
+        ((i++))
+    done
+
+    read -p ""Enter number for website: "" i
+    SELECTED_SITE=""${sites[$i]}""
+}
+
+ngx_sites() {
+    case ""$1"" in
+        available) dir=""$NGINX_SITES_AVAILABLE"";;
+        enabled) dir=""$NGINX_SITES_ENABLED"";;
+    esac
+
+    for file in $dir/*; do
+        echo -e ""\t${file#*$dir/}""
+    done
+}
+
+ngx_reload() {
+    read -p ""Would you like to reload the Nginx configuration now? (Y/n) "" reload
+    [[ ""$reload"" != ""n"" && ""$reload"" != ""N"" ]] && invoke-rc.d nginx reload
+}
+
+ngx_error() {
+    echo -e ""${0##*/}: ERROR: $1""
+    [[ ""$2"" ]] && ngx_help
+    exit 1
+}
+
+ngx_help() {
+    echo ""Usage: ${0##*/} [options]""
+    echo ""Options:""
+    echo -e ""\t<-e|--enable> <site>\tEnable site""
+    echo -e ""\t<-d|--disable> <site>\tDisable site""
+    echo -e ""\t<-l|--list>\t\tList sites""
+    echo -e ""\t<-h|--help>\t\tDisplay help""
+    echo -e ""\n\tIf <site> is left out a selection of options will be presented.""
+    echo -e ""\tIt is assumed you are using the default sites-enabled and""
+    echo -e ""\tsites-disabled located at $NGINX_CONF_DIR.""
+}
+
+##
+# Core Piece
+##
+
+case ""$1"" in
+    -e|--enable)    ngx_enable_site;;
+    -d|--disable)   ngx_disable_site;;
+    -l|--list)  ngx_list_site;;
+    -h|--help)  ngx_help;;
+    *)      ngx_error ""No Options Selected"" 1; ngx_help;;
+esac
+---
+$ sudo nginx_modsite -l
+---
+$ sudo nginx_modsite -e test_website
+---
+$ sudo nginx_modsite -d test_website","nginx, command-line-interface, website, command",977
+IT-000010,serverfault,Web & Reverse Proxy,How do you restart php-fpm?,I need to reload my php.ini and there's nothing in the help dialog about restarting it.,No explicit stack trace attached.,"Note : prepend sudo if not root Using SysV Init scripts directly: Using service wrapper script Using Upstart (e.g. ubuntu): Using systemd (newer servers): Or whatever the equivalent is on your system.
+
+[Remediation Script / Config]:
+/etc/init.d/php-fpm restart    # typical
+/etc/init.d/php5-fpm restart   # debian-style
+/etc/init.d/php7.0-fpm restart # debian-style PHP 7
+---
+service php-fpm restart    # typical
+service php5-fpm restart   # debian-style
+service php7.0-fpm restart # debian-style PHP 7
+---
+restart php7.0-fpm         # typical (ubuntu is debian-based) PHP 7
+restart php5-fpm           # typical (ubuntu is debian-based)
+restart php-fpm            # uncommon
+---
+systemctl restart php-fpm.service    # typical
+systemctl restart php5-fpm.service   # uncommon
+systemctl restart php7.0-fpm.service # uncommon PHP 7","nginx, php, php-fpm, php5",166
+IT-000011,serverfault,Web & Reverse Proxy,How to remove the path with an nginx proxy_pass,"I have a running web-application at http://example.com/ , and want to ""mount"" another application, on a separate server on http://example.com/en . Upstream servers and proxy_pass seem to work, but for one issue: When opening example.com/en , my upstream application returns 404 not found /en . This makes sense, as the upstream does not have the path /en . Is proxy_path the right solution? Should I rewrite ""upstream"" so it listens to /en instead, as it root path? Or is there a directive that allows me to rewrite the path passed along to upstream?","upstream luscious {
+ server lixxxx.members.linode.com:9001;
+}
+
+server {
+  root /var/www/example.com/current/public/;
+  server_name example.com;
+
+  location /en {
+    proxy_pass http://luscious;
+  }
+}","This is likely the most efficient way to do what you want, without the use of any regular expressions:
+
+[Remediation Script / Config]:
+location = /en {
+    return 302 /en/;
+}
+location /en/ {
+    proxy_pass http://luscious/;  # note the trailing slash here, it matters!
+}","nginx, path, proxypass",215
+IT-000012,serverfault,Web & Reverse Proxy,How to output variable in nginx log for debugging,I am testing nginx and want to output variables to the log files. How can I do that and which log file will it go (access or error).,No explicit stack trace attached.,"You can send nginx variable values via headers. Handy for development. and you'll see in your browser's response headers: I sometimes do this during local development. It's also handy for telling you if a subsection is getting executed or not. Just sprinkle it inside your clauses to see if they're getting used. So visiting a url like http://www.example.com/index.php will trigger the latter header while visiting http://www.example.com/img/my-ducky.png will trigger the former header.
+
+[Remediation Script / Config]:
+add_header X-uri ""$uri"";
+---
+X-uri:/index.php
+---
+location ~* ^.+.(jpg|jpeg|gif|css|png|js|ico|html|xml|txt)$ {
+    add_header X-debug-message ""A static file was served"" always;
+    ...
+}
+
+location ~ \.php$ {
+    add_header X-debug-message ""A php file was used"" always;
+    ...
+}",nginx,189
+IT-000013,serverfault,Web & Reverse Proxy,Can I hide all server / os info?,"I don't want anyone to be able to detect that I'm using NGINX or even Ubuntu from the internet. There are tools out there (such as BuiltWith) which scan servers to detect what tools they're using. Also, some cracking tools might help with deteting. What's the best / closest to that I can get to hiding all this info from the outside?",No explicit stack trace attached.,"You can stop it outputting the version of Nginx and OS by adding to a http , server , or location context. Or if you want to remove the Server header completely, you need to compile Nginx with the Headers More module in, as the header is hard coded in the Nginx source, and this module allows changing any http headers. However, there are many hidden ways servers perform by accident via their implementation which may help identify the system. e.g. How it responds to a bad SSL request. I don't see a practical way of preventing this. Some of the things I might suggest: change error templates block all ports except the services needed
+
+[Remediation Script / Config]:
+server_tokens off;
+---
+more_clear_headers Server;","nginx, ubuntu",252
+IT-000014,serverfault,Web & Reverse Proxy,Is it possible to make Nginx listen to different ports?,"I created one Nginx with one Linux Azure VM, is it possible to make nginx listen to different ports so that when I change the port number, the content would be different. I found there would be a collision if I created two or more ports related to HTTP on VM. Can anyone help me with that?",No explicit stack trace attached.,"Yes, it is. What you probably want is multiple ""server"" stanzas, each with a different port, but possibly (probably?) the same server_name, serving the ""different"" content appropriately within each one, maybe with a different document root in each server. Full documentation is here: http://nginx.org/en/docs/http/server_names.html Example:
+
+[Remediation Script / Config]:
+server {
+    listen       80;
+    server_name  example.org  www.example.org;
+    root         /var/www/port80/
+}
+
+server {
+    listen       81;
+    server_name  example.org  www.example.org;
+    root         /var/www/port81/
+}","linux, nginx, virtual-machines, azure",176
+IT-000015,serverfault,Web & Reverse Proxy,How to set up Nginx as a caching reverse proxy?,"I heard recently that Nginx has added caching to its reverse proxy feature. I looked around but couldn't find much info about it. I want to set up Nginx as a caching reverse proxy in front of Apache/Django: to have Nginx proxy requests for some (but not all) dynamic pages to Apache, then cache the generated pages and serve subsequent requests for those pages from cache. Ideally I'd want to invalidate cache in 2 ways: Set an expiration date on the cached item To explicitly invalidate the cached item. E.g. if my Django backend has updated certain data, I'd want to tell Nginx to invalidate the cache of the affected pages Is it possible to set Nginx to do that? How?",No explicit stack trace attached.,"I don't think that there is a way to explicitly invalidate cached items, but here is an example of how to do the rest. Update: As mentioned by Piotr in another answer, there is a cache purge module that you can use. You can also force a refresh of a cached item using nginx's proxy_cache_bypass - see Cherian's answer for more information. In this configuration, items that aren't cached will be retrieved from example.net and stored. The cached versions will be served up to future clients until they are no longer valid (60 minutes). Your Cache-Control and Expires HTTP headers will be honored, so if you want to explicitly set an expiration date, you can do that by setting the correct headers in whatever you are proxying to. There are lots of parameters that you can tune - see the nginx Proxy module documentation for more information about all of this including details on the meaning of the different settings/parameters: http://nginx.org/r/proxy_cache_path
+
+[Remediation Script / Config]:
+http {
+  proxy_cache_path  /var/www/cache levels=1:2 keys_zone=my-cache:8m max_size=1000m inactive=600m;
+  proxy_temp_path /var/www/cache/tmp; 
+
+
+  server {
+    location / {
+      proxy_pass http://example.net;
+      proxy_cache my-cache;
+      proxy_cache_valid  200 302  60m;
+      proxy_cache_valid  404      1m;
+    }
+  }
+}","proxy, nginx, reverse-proxy, varnish",422
+IT-000016,serverfault,Web & Reverse Proxy,connect() failed (111: Connection refused) while connecting to upstream,I'm experiencing 502 Gateway errors when accessing a PHP file in a directory ( http://example.com/dev/index.php ). The logs simply says this: I've never experienced this before. What is the solution for this type of 502 Gateway error? This is the nginx.conf :,"2011/09/30 23:47:54 [error] 31160#0: *35 connect() failed (111: Connection refused) while connecting to upstream, client: xx.xx.xx.xx, server: domain.com, request: ""GET /dev/ HTTP/1.1"", upstream: ""fastcgi://127.0.0.1:9000"", host: ""domain.com""
+---
+user www-data;
+worker_processes 4;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 768;
+    # multi_accept on;
+}
+
+http {
+
+    ##
+    # Basic Settings
+    ##
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    # server_tokens off;
+
+    # server_names_hash_bucket_size 64;
+    # server_name_in_redirect off;
+
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    ##
+    # Logging Settings
+    ##
+
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log;
+
+    ##
+    # Gzip Settings
+    ##
+
+    gzip on;
+    gzip_disable ""msie6"";
+
+    # gzip_vary on;
+    # gzip_proxied any;
+    # gzip_comp_level 6;
+    # gzip_buffers 16 8k;
+    # gzip_http_version 1.1;
+    # gzip_types text/plain text/css application/json application/x-javascript text/xml application/xml application/xml+rss text/javascript;
+
+    ##
+    # Virtual Host Configs
+    ##
+
+    include /etc/nginx/conf.d/*.conf;
+    include /etc/nginx/sites-enabled/*;
+}","It sounds like you haven't started and configured the backend for Nginx. Start php-fpm and add the following to nginx.conf , in the http context:
+
+[Remediation Script / Config]:
+server {
+    listen 127.0.0.1;
+    server_name localhost;
+
+    error_log /var/log/nginx/localhost.error_log info;
+
+    root /var/www/localhost/htdocs;
+
+    location ~ \.php$ {
+        fastcgi_pass 127.0.0.1:9000;
+        include /etc/nginx/conf.d/*.conf;
+        include /etc/nginx/sites-enabled/*;
+
+        fastcgi_intercept_errors        on;
+        error_page 404 /error/404.php;
+    }
+}","nginx, 502-error",304
+IT-000017,serverfault,Web & Reverse Proxy,How to disable timeout for nginx?,"On a local development machine, I have a nginx reverse proxy like so: Yet if I debug my application, the response may be delayed for an infinite amount of time, yet after 30 seconds I get: 504 Gateway Time-out as a response. How can I disable the timeout and have my reverse proxy wait forever for a response? And I like the setting to be global, so that I do not have to set it for each proxy.","server {
+  listen 80;
+  server_name myvirtualhost1.local;
+  location / {
+    proxy_pass http://127.0.0.1:8080;
+}
+
+server {
+  listen 80;
+  server_name myvirtualhost2.local;
+  location / {
+    proxy_pass http://127.0.0.1:9090;
+}","It may not be possible to disable it at all, yet a feasible workaround is to increase the execution time. On a nginx tutorial site , it was written: If you want to increase time-limit for all-sites on your server, you can edit main nginx.conf file: Add following in http{..} section and reload nginx' config: I have used a rather large value that is unlikely to happen, i.e. 999999 or using time units , to one day via 1d . Beware that setting the value to 0 will cause a gateway timeout error immediately.
+
+[Remediation Script / Config]:
+vim /etc/nginx/nginx.conf
+---
+http {
+     fastcgi_read_timeout 300;
+     proxy_read_timeout 300;
+}
+---
+sudo service nginx reload","nginx, configuration, timeout",287
+IT-000018,serverfault,Web & Reverse Proxy,How does try_files work?,"I looked at the nginx documentation and it still confuses me utterly. How does try_files work? Here is what the documentation says: From NginxHttpCoreModule try_files syntax: try_files path1 [path2] uri default: none context: server, location availability: 0.7.27 Checks for the existence of files in order, and returns the first file that is found. A trailing slash indicates a directory - $uri /. In the event that no file is found, an internal redirect to the last parameter is invoked. The last parameter is the fallback URI and must exist, or else an internal error will be raised. Unlike rewrite, $args are not automatically preserved if the fallback is not a named location. If you need args preserved, you must do so explicitly: I don't understand how it checks the paths and what if I don't want an internal error but have it resume the rest of the path in an effort to find another file? If I want to try a cached file at /path/app/cache/url/index.html and if it fails to try /path/app/index.php how would I write that? If I wrote: I have index index.php index.html index.htm; . When I visit /urlname , will it try checking /path/app/cache/urlname/index.php then /path/app/cache/urlname/index.html ? If we ignore everything after try_files is it possible for try_files to check the cache folder? I have been trying and have failed.","try_files /path/app/cache/ $uri
+include /etc/nginx/fastcgi_params;
+fastcgi_pass unix:/var/run/php-fastcgi/php-fastcgi.socket;
+fastcgi_param SCRIPT_FILENAME $document_root/index.php;","try_files tries the literal path you specify in relation to the defined root directive and sets the internal file pointer. If you use for instance try_files /app/cache/ $uri @fallback; with index index.php index.html; then it will test the paths in this order: $document_root/app/cache/index.php $document_root/app/cache/index.html $document_root$uri before finally internally redirecting to the @fallback named location. You can also use a file or a status code ( =404 ) as your last parameter but if using a file it must exist . You should note that try_files itself will not issue an internal redirect for anything but the last parameter. Meaning you cannot do the following: try_files $uri /cache.php @fallback; as that will cause nginx to set the internal file pointer to $document_root/cache.php and serve it, but since no internal redirect takes place the locations aren't re-evaluated and as such it will be served as plain text. (The reason it works with PHP files as the index is that the index directive will issue an internal redirect)",nginx,522
+IT-000019,serverfault,Web & Reverse Proxy,Nginx 1 FastCGI sent in stderr: “Primary script unknown”,"My first time using Nginx, but I am more than familiar with Apache and Linux. I am using an existing project and when ever I am trying to see the index.php I get a 404 File not found. Here is the access.log entry: And here is the sites-available file: My /home/willem/git/console is owned by www-data:www-data (my web user running php etc) and I have given it 777 permissions out of frustration... My best guess is that something is wrong with the config, but I can't figure it out... UPDATE So I moved it to /var/www/ and used a much more basic config: Also if I call localhost/console/frontend/www/index.php I get a 500 PHP which means it is serving there. It just isn't serving off console.ordercloud ...","2013/06/19 16:23:23 [error] 2216#0: *1 FastCGI sent in stderr: ""Primary script unknown"" while reading response header from upstream, client: 127.0.0.1, server: localhost, request: ""GET /index.php HTTP/1.1"", upstream: ""fastcgi://127.0.0.1:9000"", host: ""www.ordercloud.lh""
+---
+server {
+    set $host_path ""/home/willem/git/console/www"";
+    access_log  /www/logs/console-access.log  main;
+
+    server_name  console.ordercloud;
+    root   $host_path/htdocs;
+    set $yii_bootstrap ""index.php"";
+
+    charset utf-8;
+
+    location / {
+        index  index.html $yii_bootstrap;
+        try_files $uri $uri/ /$yii_bootstrap?$args;
+    }
+
+    location ~ ^/(protected|framework|themes/\w+/views) {
+        deny  all;
+    }
+
+    #avoid processing of calls to unexisting static files by yii
+    location ~ \.(js|css|png|jpg|gif|swf|ico|pdf|mov|fla|zip|rar)$ {
+        try_files $uri =404;
+    }
+
+    # pass the PHP scripts to FastCGI server listening on 127.0.0.1:9000
+    #
+    location ~ \.php {
+        fastcgi_split_path_info  ^(.+\.php)(.*)$;
+
+        #let yii catch the calls to unexising PHP files
+        set $fsn /$yii_bootstrap;
+        if (-f $document_root$fastcgi_script_name){
+            set $fsn $fastcgi_script_name;
+        }
+
+        fastcgi_pass   127.0.0.1:9000;
+        include fastcgi_params;
+        fastcgi_param  SCRIPT_FILENAME  $document_root$fsn;
+
+        #PATH_INFO and PATH_TRANSLATED can be omitted, but RFC 3875 specifies them for CGI
+        fastcgi_param  PATH_INFO        $fastcgi_path_info;
+        fastcgi_param  PATH_TRANSLATED  $document_root$fsn;
+    }
+
+    location ~ /\.ht {
+        deny  all;
+    }
+}
+---
+server {
+    #listen   80; ## listen for ipv4; this line is default and implied
+    #listen   [::]:80 default ipv6only=on; ## listen for ipv6
+
+    root /var/www/;
+    index index.html index.htm;
+
+    # Make site accessible from http://localhost/
+    server_name console.ordercloud;
+
+    location / {
+        root           /var/www/console/frontend/www/;
+                fastcgi_pass   127.0.0.1:9000;
+                fastcgi_index  index.php;
+                fastcgi_param  SCRIPT_FILENAME  /var/www;
+            include        fastcgi_params;
+    }
+
+    location ~ \.(js|css|png|jpg|gif|swf|ico|pdf|mov|fla|zip|rar)$ {
+            try_files $uri =404;
+        }
+
+    location /doc/ {
+        alias /usr/share/doc/;
+        autoindex on;
+        allow 127.0.0.1;
+        deny all;
+    }
+
+}","Ok, so 3 things I found after a day of struggling For some reason I had already something running on port 9000 so I changed to 9001 My default site was intercepting my new one, once again I don't under stand why since it shouldn't, but I just unlinked it Nginx doesn't automatically do the sym link for sites-available to site-enabled. Hope this saves someone some trouble!","nginx, php-fpm",557
+IT-000020,serverfault,Web & Reverse Proxy,Do you need separate IPv4 and IPv6 listen directives in nginx?,"I've seen various config examples for handling dual-stack IPv4 and IPv6 virtual hosts on nginx. Many suggest this pattern: As far as I can see, this achieves exactly the same thing as: Why would you use the former? The only reason I can think of is if you need additional params that are specific to each protocol, for example if you only wanted to set deferred on IPv4.","listen 80;
+listen [::]:80 ipv6only=on;
+---
+listen [::]:80 ipv6only=off;","That probably is about the only reason you would use the former construct, these days. The reason you're seeing this is probably that the default of ipv6only changed in nginx 1.3.4. Prior to that, it defaulted to off ; in newer versions it defaults to on . This happens to interact with the IPV6_V6ONLY socket option on Linux, and similar options on other operating systems, whose defaults aren't necessarily predictable. Thus the former construct was required pre-1.3.4 to ensure that you were actually listening for connections on both IPv4 and IPv6. The change to the nginx default for ipv6only ensures that the operating system default for dual stack sockets is irrelevant. Now, nginx either explicitly binds to IPv4, IPv6, or both, never depending on the OS to create a dual stack socket by default. Indeed, my standard nginx configs for pre-1.3.4 have the first configuration, and post-1.3.4 all have the second configuration. Though, since binding a dual stack socket is a Linux-only thing, my current configurations now look more like the first example, but without ipv6only set, to wit:
+
+[Remediation Script / Config]:
+listen [::]:80;
+listen 80;","nginx, ipv6, ipv4",357
+IT-000021,serverfault,Web & Reverse Proxy,nginx - client request body is buffered to a temporary file,"I get the following error in my log files every time I try to upload a large file. Although the file uploads successfully, I always get the above error. I increased the client_body_buffer_size to 1000m which is what I expect the largest file uploaded to be. However, this is was just a guess and although I don't get that error anymore I am wondering if this is an appropriate value to set for the client_body_buffer_size ? I would appreciate it if anyone can shed some light on this directive and how it should be used.",a client request body is buffered to a temporary file /var/lib/nginx/body/0000000001,"This is a warning, not an error. That's why it was prefaced with [warn] in the log. It means that the size of the uploaded file was larger than the in-memory buffer reserved for uploads. The directive client_body_buffer_size controls the size of that buffer. If you can afford to have 1GB of RAM always reserved for the occasional file upload, then that's fine. It's a performance optimization to buffer the upload in RAM rather than in a temporary file on disk, though with such large uploads a couple of extra seconds probably doesn't matter much. If most of your uploads are small, then it's probably a waste. In the end, only you can really make the decision as to what the appropriate size is.",nginx,313
+IT-000022,serverfault,Web & Reverse Proxy,How to force nginx to resolve DNS (of a dynamic hostname) everytime when doing proxy_pass?,"I am using nginx/0.7.68, running on CentOS, with the following configuration: The proxy_pass is to a DNS record whose IP changes frequently. Nginx caches the outdated IP address, resulting in a request to the wrong IP address. How can I stop nginx from caching the IP address, when it is outdated?","server {
+    listen       80;
+    server_name ***;
+    index index.html index.htm index.php default.html default.htm default.php;
+
+    location / {
+            root   /***;
+            proxy_pass   http://***:8888;
+            index  index.html index.htm;
+    }
+    # where *** is my variables",It's an intriguing question and AFAIK that's not going to work well. You can try to use the upstream module and use the directives for failover to see if it works as a hack. 2018 edit: a lot of things changed. Check the answer by @ohaal to get real information about this.,"linux, nginx",192
+IT-000023,serverfault,Web & Reverse Proxy,How to restart Nginx?,"For me, I run killall nginx and start it by sbin/nginx , anyone has a better restart script? BTW: I install Nginx from source and I do not find service nginx command or /etc/init.d/nginx .",No explicit stack trace attached.,"The Nginx package supplies a /etc/init.d/nginx script that provides the usual start|stop|restart|reload functionality. Will restart Nginx. As will this: Update : Here is a link to a script you can use as /etc/init.d/nginx .
+
+[Remediation Script / Config]:
+/etc/init.d/nginx restart
+---
+service nginx restart","nginx, redhat",107
+IT-000024,serverfault,Web & Reverse Proxy,"What does this nginx error ""rewrite or internal redirection cycle"" mean?","I am getting these from nginx error log, I don't have a ""kowol"" sub domain, I don't have any links to qq.com or joesfitness.net on my site. Whats going on? Edit: Nginx default config:","tail -f /var/log/nginx/error.log
+2013/05/04 23:43:35 [error] 733#0: *3662 rewrite or internal redirection cycle while internally redirecting to ""/index.html"", client: 127.0.0.1, server: _, request: ""GET /robots.txt HTTP/1.1"", host: ""kowol.mysite.net""
+HTTP/1.1"", host: ""www.joesfitness.net""
+2013/05/05 00:49:14 [error] 733#0: *3783 rewrite or internal redirection cycle while internally redirecting to ""/index.html"", client: 127.0.0.1, server: _, request: ""GET / http://www.qq.com/ HTTP/1.1"", host: ""www.qq.com""
+2013/05/05 03:12:33 [error] 733#0: *4232 rewrite or internal redirection cycle while internally redirecting to ""/index.html"", client: 127.0.0.1, server: _, request: ""GET / HTTP/1.1"", host: ""joesfitness.net""
+---
+server {
+    listen   8080; ## listen for ipv4; this line is default and implied
+    listen   [::]:8080 default ipv6only=on; ## listen for ipv6
+
+    root /usr/share/nginx/www;
+    index index.php index.html index.htm;
+
+    # Make site accessible from http://localhost/
+    server_name _;
+
+    location / {
+        # First attempt to serve request as file, then
+        # as directory, then fall back to index.html
+        try_files $uri $uri/ /index.html;
+        # Uncomment to enable naxsi on this location
+        # include /etc/nginx/naxsi.rules
+    }
+
+    location /doc/ {
+        alias /usr/share/doc/;
+        autoindex on;
+        allow 127.0.0.1;
+        deny all;
+    }
+
+    # Only for nginx-naxsi : process denied requests
+    #location /RequestDenied {
+        # For example, return an error code
+        #return 418;
+    #}
+
+    #error_page 404 /404.html;
+
+    # redirect server error pages to the static page /50x.html
+    #
+    #error_page 500 502 503 504 /50x.html;
+    #location = /50x.html {
+    #   root /usr/share/nginx/www;
+    #}
+
+    # pass the PHP scripts to FastCGI server listening on 127.0.0.1:9000
+    #
+    location ~ \.php$ {
+        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        # NOTE: You should have ""cgi.fix_pathinfo = 0;"" in php.ini
+
+        # With php5-cgi alone:
+        fastcgi_pass 127.0.0.1:9000;
+        #With php5-fpm:
+        #fastcgi_pass unix:/var/run/php5-fpm.sock;
+        fastcgi_index index.php;
+        include fastcgi_params;
+    }
+
+    # deny access to .htaccess files, if Apache's document root
+    # concurs with nginx's one
+    #
+    #location ~ /\.ht {
+    #   deny all;
+    #}
+}","It's a strange one all right, though I'm going to bet the problem is with: The problem here is that the second parameter here, $uri/ , causes each of the files in your index directive to be tried in turn. If none are found, it then moves on to /index.html , which causes the same location block to be re-entered, and since it still doesn't exist, you get an endless loop. I would rewrite this as: to return a 404 error if none of the index files you specified in the index directive exist. BTW, those requests you are seeing are Internet background noise . In particular, they are probes to determine whether your web server is an open proxy and can be abused to hide a malicious user's origin when he goes to perform malicious activity. Your server isn't an open proxy in this configuration, so you don't really need to worry about it.
+
+[Remediation Script / Config]:
+try_files $uri $uri/ /index.html;
+---
+try_files $uri $uri/ =404;",nginx,646
+IT-000025,serverfault,Web & Reverse Proxy,"Setting the ""Expires"" HTTP header for static content served from Nginx?","I'm using nginx to server my static content, is there a way that I can set the expires headers for every file that meets a specific rule? For example can I set the expires header for all files that have an extension of '.css'?",No explicit stack trace attached.,"I prefer to do a more complete cache header, in addition to some more file extensions. The '?' prefix is a 'non-capturing' mark, nginx won't create a $1. It helps to reduce unnecessary load.
+
+[Remediation Script / Config]:
+location ~* \.(?:ico|css|js|gif|jpe?g|png)$ {
+    expires 30d;
+    add_header Pragma public;
+    add_header Cache-Control ""public"";
+}","nginx, http-headers",137
+IT-000026,serverfault,Web & Reverse Proxy,an upstream response is buffered to a temporary file,"I have a rather large and slow (complex data, complex frontend) web application build in RoR and served by Puma with nginx as reverse proxy. Looking at the nginx error log, I see quite a few entries like: I am rather curious as it's very unlikely that the page remains the same for different users and different user interactions, and I would not think that buffering the response on disk is necessary/useful. I know about proxy_max_temp_file_size and setting it to 0, but it seems to me a little bit awkward (my proxy tries to buffer but has no file where to buffer to... how can that be faster?). My questions are: How can I remove the [warn] and avoid buffering responses? Is it better to turn off proxy_buffering or to set proxy_max_temp_file_size to 0? Why? If nginx buffers a response: When does it serve the buffered response, to whom, and why? Why nginx turns proxy_buffering on by default and then [warn]s you if it actually buffers a response? When does a response trigger that option? When it takes > some seconds (how many?) to serve the response? Is this configurable? TIA, ngw.","2014/04/08 09:46:08 [warn] 20058#0: *819237 an upstream response is buffered to a temporary file 
+    /var/lib/nginx/proxy/8/47/0000038478 while reading upstream, 
+    client: 5.144.169.242, server: engagement-console.foo.it, 
+    request: ""GET /elements/pending?customer_id=2&page=2 HTTP/1.0"", 
+    upstream: ""http://unix:///home/deployer/apps/conversationflow/shared/sockets/puma.sock:/elements/pending?customer_id=2&page=2"", 
+    host: ""ec.reputationmonitor.it"", 
+    referrer: ""http://ec.foo.it/elements/pending?customer_id=2&page=3""","How can I remove the [warn] and avoid buffering responses? Is it better to turn off proxy_buffering or set proxy_max_temp_file_size to 0? Why? You should set proxy_max_temp_file_size to 0 in order to remove it. The proxy_buffering directive isn't directly related to the warning. You can switch it off to stop any buffering at all but that isn't recommended in general (unless it's needed for Comet ). If nginx buffers a response when does it serve the buffered response, to whom and why? It serves the response immediately, but a client usually has a much slower connection and can't consume the response data as fast as it is produced by your application. Nginx tries to buffer the whole response in order to release your application ASAP. See also: http://aosabook.org/en/nginx.html Why nginx turns proxy_buffering on by default and then [warn]s you if it actually buffers a response? As I already mentioned, the proxy_buffering isn't directly related to the warning. It's generally needed for optimized proxy operations and turning it off degrades performance and throughput. Nginx only warns you when a response doesn't fit into configured memory buffers. You may ignore the warning if it's ok for you. When does a response triggers that option? When it takes > than some seconds (how many?) to serve the response? Is this configurable? It triggers when memory buffers are full. Please, look at the docs, the whole mechanism is explained: http://nginx.org/r/proxy_max_temp_file_size You may want to increase memory buffers.","nginx, reverse-proxy, buffer",618
+IT-000027,serverfault,Web & Reverse Proxy,How to make a modification take affect without restarting nginx?,Apache has a graceful option which can scan for modification in http.conf without restarting Apache. What about nginx?,No explicit stack trace attached.,"nginx supports the following signals : HUP is what you are looking for, so sudo kill -HUP pid (nginx pid) source : http://nginx.org/en/docs/control.html
+
+[Remediation Script / Config]:
+TERM, INT - Quick shutdown
+QUIT - Graceful shutdown
+HUP - Configuration reload: Start the new worker processes with a new configuration, Gracefully shutdown the old worker processes
+USR1 - Reopen the log files
+USR2 - Upgrade Executable on the fly
+WINCH - Gracefully shutdown the worker processes",nginx,133
+IT-000028,serverfault,Web & Reverse Proxy,Nested Nginx location (prefix blocks in regex blocks) not working,"I'm having trouble understanding nested locations in nginx. I have two locations with some configuration directives in common, so rather than repeat the directives, I'd prefer to repeat the URI using a regular-expression: However, this gives the error Without the or | it seems okay, though. What am I doing wrong? Is there a better way to do this without repeating anything? Can I group locations in another way?","location ~ /a|/b {
+        location /a {
+        }
+        location /b {
+        }
+}
+---
+nginx: [emerg] location ""/a"" is outside location ""/a|/b"" in /etc/nginx/nginx.conf:36
+---
+location ~ /a {
+        location /a {
+        }
+}","Old question, but the issue is because the parent location is a regex location while the nested locations are prefix locations. When a parent location is defined by a regex, any nested locations must also be defined by regexes: You may only define nested prefix locations when the parent location is also a prefix location: However, you may define nested regex locations when the parent location is a prefix location:
+
+[Remediation Script / Config]:
+location ~ ^/(a|b) {
+        location ~ ^/a {
+        ...
+        }
+        location ~ ^/b {
+        ...
+        }
+}
+---
+location /a {
+        location /a {
+               # You can also skip this location and just write
+               # your code directly under the parent location
+        }
+        location /a/b {
+        ...
+        }
+}
+---
+location /a/b {
+        location ~ /a {
+        ...
+        }
+        location ~ /b {
+        ...
+        }
+}",nginx,328
+IT-000029,serverfault,Web & Reverse Proxy,"Nginx - root versus alias, for serving single files?","After many hours getting nginx to serve single files such as robots.txt (hint: clear your browser cache each time), I wound up with two different ways, one using the alias directive, and one using the root directive, like so: Is there any functional difference between the two? Or security issues? Any conflicts with other directives? (Both seemed fine with another /static location). Or any reason to pick one over the other? Note - I didn't use both at the same time :) Rather I tried each, one at a time, and both worked. I'm not asking how they both interact together in the same file, but which one would be better to use.","location /robots.txt { alias /home/www/static/robots.txt; }
+location /robots.txt { root /home/www/static/;  }","Well, these two directives are slightly functional different because you do not use exact match in the latter case. So, /robots.txt1111 will match your second location too. location =/robots.txt { root /home/www/static/; } is an exact functional equivalent of your first directive.",nginx,228
+IT-000030,serverfault,Web & Reverse Proxy,"What is the difference between Nginx variables $host, $http_host, and $server_name?","What is the difference between the three Nginx variables $host , $http_host , and $server_name ? I have a rewrite rule where I'm not sure which one I should be using: I'm looking for an answer that doesn't just say 'use ___ variable in your rewrite rule' but also explains the theoretical differences between them.","location = /vb/showthread.php {
+    # /vb/showthread.php?50271-What-s-happening&p=846039
+    if ($arg_p) {
+        return 301 $scheme://$host/forum/index.php?posts/$arg_p/;
+        }","You should almost always use $host , as it's the only one guaranteed to have something sensible regardless of how the user-agent behaves, unless you specifically need the semantics of one of the other variables. The difference is explained in the nginx documentation : $host contains ""in this order of precedence: host name from the request line, or host name from the 'Host' request header field, or the server name matching a request"" $http_host contains the content of the HTTP ""Host"" header field, if it was present in the request $server_name contains the server_name of the virtual host which processed the request, as it was defined in the nginx configuration. If a server contains multiple server_name s, only the first one will be present in this variable. Since it is legal for user-agents to send the hostname in the request line rather than in a Host: header, though it is rarely done except when connecting to proxies, you have to account for this. You also have to account for the case where the user-agent doesn't send a hostname at all, e.g. ancient HTTP/1.0 requests and modern badly-written software. You might do so by diverting them to a catch-all virtual host which doesn't serve anything, if you are serving multiple web sites, or if you only have a single web site on your server you might process everything through a single virtual host. In the latter case you have to account for this as well. Only the $host variable accounts for all the possible things that a user-agent may do when forming an HTTP request.","nginx, rewrite",445
+IT-000031,serverfault,Web & Reverse Proxy,What’s the difference between the “mainline” and “stable” branches of nginx?,There seem to be two active branches of the nginx web server: a “mainline” branch (currently 1.9.x) and a “stable” branch (currently 1.8.x). Can anyone provide an official source that describes the difference between these two branches and how one would choose between them?,No explicit stack trace attached.,"The difference between mainline and stable is explained here: https://www.nginx.com/blog/nginx-1-6-1-7-released/ A graphical summary: Among other differences: Note that stable does not mean more reliable or more bug-free. In fact, the mainline is generally regarded as more reliable because we port all bug fixes to it, and not just critical fixes as for the stable branch. On the other hand, changes in the stable branch are very unlikely to affect third-party modules. We don’t make the same commitment concerning the mainline, where new features can affect the operation of third-party modules. Also: We recommend that in general you deploy the NGINX mainline branch at all times.",nginx,208
+IT-000032,serverfault,Web & Reverse Proxy,"Nginx Redirect via Proxy, Rewrite and Preserve URL","In Nginx we have been trying to redirect a URL as follows: where the user still sees the original URL in their browser. Once the user is redirected, say they click on the link to /section/index.html , we would want this to make a request that leads to the redirect and again still preserve the original URL. Our attempts have involved various solutions using proxies and rewrite rules, and below shows the configuration that has brought us closest to a solution (note that this is the web server configuration for the example.com web server). However, there are still two problems with this: It does not perform the rewrite properly, in that the request URL received by the web server http://192.168.1.24 includes /some/path and therefore fails to serve the required page. When you hover on a link once a page has been served, /some/path is missing from the URL We are looking for a solution that only involves changing the web server configuration on example.com . We are able to change the config on 192.168.1.24 (also Nginx), however we want to try and avoid this because we will need to repeat this setup for hundreds of different servers whose access is proxied through example.com .","http://example.com/some/path -> http://192.168.1.24
+---
+http://example.com/some/path/section/index.html -> http://192.168.1.24/section/index.html
+---
+server {
+    listen          80;
+    server_name     www.example.com;
+
+    location /some/path/ {
+        proxy_pass http://192.168.1.24;
+        proxy_redirect http://www.example.com/some/path http://192.168.1.24;
+        proxy_set_header Host $host;
+    }
+
+    location / {
+        index index.html;
+        root  /var/www/example.com/htdocs;
+    }
+}","First, you shouldn't use root directive inside the location block, it is a bad practice. In this case it doesn't matter though. Try adding a second location block: This captures the part after /some/path/ and before index.html to a $section variable, which is then used to set the proxy_pass destination. You can make the regex more specific if you require.
+
+[Remediation Script / Config]:
+location ~ /some/path/(?<section>.+)/index.html {
+    proxy_pass http://192.168.1.24/$section/index.html;
+    proxy_set_header Host $host;
+}","nginx, proxy, redirect, rewrite",417
+IT-000033,serverfault,Web & Reverse Proxy,Why do I need nginx when I have uWSGI,"There are many tutorials on how to configure nginx to cooperate with uWGSI when I want to deploy Django application. But why do I need nginx in this kit? uWSGI itself can serve WSGI Python applications, it can serve static files, it can also do SSL. What can nginx do which uWSGI can not?",No explicit stack trace attached.,"You don't. That's the simple answer, anyway -- you don't need it. uWSGI is itself a capable server. However, other servers like nginx have been around longer and are (probably, anyway) more secure, as well as having additional features not supported by uWSGI -- for example, improved handling of static resources (via any combination of Expires or E-Tag headers, gzip compression, pre-compressed gzip, etc.) that can significantly reduce server and network load; additionally, a server like nginx in front of your Django application can implement caching of your dynamic content as well, further helping to reduce server load, and even helping to facilitate the use of a CDN (which normally don't do well with dynamic content). You could even go further and have nginx on a completely separate server, reverse proxying requests for dynamic content to a load balanced cluster of application servers while handling the static content itself. For example, my blog (while it is WordPress, it does have nginx in front of it) is tuned to cache posts for 24 hours, and to cache index pages for 5 minutes; while I don't see enough traffic for that to really matter most of the time, it helps my tiny little VPS weather the occasional surge that might otherwise knock it down -- such as the big surge of traffic when one of my articles got picked up by a Twitterer with many thousands of followers, many of whom re-tweeted it to their thousands of followers. If I had been running a ""bare"" uWSGI server (and assuming it had been a Django site, rather than WordPress), it might have stood up to it just fine -- or it might have crashed and burned, costing me in missed visitors. Having nginx in front of it to handle that load can really help. All that being said, if you're just running a little site that won't see a lot of traffic, there's no real need for nginx or anything else -- just use uWSGI on its own if that's what you want to do. On the other hand, if you'll see a lot of traffic... well, you still might want uWSGI, but you should at least consider something in front of it to help with the load. Actually, you should really be load-testing different configurations with your finished site to determine what does work best for you under your expected load, and use whatever that ends up being.","nginx, django, uwsgi",609
+IT-000034,serverfault,Web & Reverse Proxy,nginx real_ip_header and X-Forwarded-For seems wrong,"The wikipedia description of the HTTP header X-Forwarded-For is: X-Forwarded-For: client1, proxy1, proxy2, ... The nginx documentation for the directive real_ip_header reads, in part: This directive sets the name of the header used for transferring the replacement IP address. In case of X-Forwarded-For, this module uses the last ip in the X-Forwarded-For header for replacement. [Emphasis mine] These two descriptions seem at odds with one another. In our scenario, the X-Forwarded-For header is exactly as described -- the client's ""real"" IP address is the left-most entry. Likewise, the behavior of nginx is to use the right -most value -- which, obviously, is just one of our proxy servers. My understanding of X-Real-IP is that it is supposed to be used to determine the actual client IP address -- not the proxy. Am I missing something, or is this a bug in nginx? And, beyond that, does anyone have any suggestions for how to make the X-Real-IP header display the left -most value, as indicated by the definition of X-Forwarded-For ?",No explicit stack trace attached.,"I believe the key to solving X-Forwarded-For woes when multiple IPs are chained is the recently introduced configuration option, real_ip_recursive (added in nginx 1.2.1 and 1.3.0). From the nginx realip docs : If recursive search is enabled, an original client address that matches one of the trusted addresses is replaced by the last non-trusted address sent in the request header field. nginx was grabbing the last IP address in the chain by default because that was the only one that was assumed to be trusted. But with the new real_ip_recursive enabled and with multiple set_real_ip_from options, you can define multiple trusted proxies and it will fetch the last non-trusted IP. For example, with this config: And an X-Forwarded-For header resulting in: nginx will now pick out 123.123.123.123 as the client's IP address. As for why nginx doesn't just pick the left-most IP address and requires you to explicitly define trusted proxies, it's to prevent easy IP spoofing. Let's say a client's real IP address is 123.123.123.123 . Let's also say the client is up to no good, and they're trying to spoof their IP address to be 11.11.11.11 . They send a request to the server with this header already in place: Since reverse proxies simply add IPs to this X-Forwarded-For chain, let's say it ends up looking like this when nginx gets to it: If you simply grabbed the left-most address, that would allow the client to easily spoof their IP address. But with the above example nginx config, nginx will only trust the last two addresses as proxies. This means nginx will correctly pick 123.123.123.123 as the IP address, despite that spoofed IP actually being the left-most.
+
+[Remediation Script / Config]:
+set_real_ip_from 127.0.0.1;
+set_real_ip_from 192.168.2.1;
+real_ip_header X-Forwarded-For;
+real_ip_recursive on;
+---
+X-Forwarded-For: 123.123.123.123, 192.168.2.1, 127.0.0.1
+---
+X-Forwarded-For: 11.11.11.11
+---
+X-Forwarded-For: 11.11.11.11, 123.123.123.123, 192.168.2.1, 127.0.0.1","nginx, reverse-proxy, http-headers",625
+IT-000035,serverfault,Web & Reverse Proxy,Nginx redirect one path to another,"I'm sure this has been asked before, but I can't find a solution that works. A website has switched CMS services, but has the same domain, how do I set up an nginx rewrite for a single page? E.g. Old Page http://sitedomain.co.uk/content/unique-page-name New page http://sitedomain.co.uk/new-name/unique-page-name Please note , I don't want everything within the content page to be redirected, but literally just the url mentioned above. I have about 9 redirects to set up, non of which fit in a pattern. Thanks! Edit: I found this solution, which seems to be working, except for the fact that it redirects without a slash: But this redirects to: http://sitedomain.co.uknew-name/unique-page-name/","if ( $request_filename ~ content/unique-page-name/ ) {
+   rewrite ^ http://sitedomain.co.uk/new-name/unique-page-name/? permanent;
+}","Direct quote from Pitfalls and Common Mistakes: Taxing Rewrites : By using the return directive we can completely avoid evaluation of regular expression. Please use return instead of rewrite for permanent redirects. Here's my approach to this use-case...
+
+[Remediation Script / Config]:
+location = /content/unique-page-name {
+  return 301 /new-name/unique-page-name;
+}","nginx, rewrite",227
+IT-000036,serverfault,Web & Reverse Proxy,Nginx - Meaning of the ~ (tilde) in the location block of the nginx.conf?,"What is the meaning of the tilde after the location block in the nginx configuration? for example What is the difference between with and without the ""~"" ?","location ~ ^/download/(.*)$ {
+  alias /home/website/files/$1;
+}","The tilde instructs nginx to perform a case-sensitive regular expression match, instead of a straight string comparison. More details in the docs .","nginx, rewrite",93
+IT-000037,serverfault,Web & Reverse Proxy,Dump nginx config from running process?,"Apparently, I shouldn't have spent sleepless night trying to debug an application. I wanted to restart my nginx and discovered that its config file is empty. I don't remember truncating it, but fat fingers and reduced attention probably played their part. I don't have backup of that config file. I know I should have made it. Good for me, current nginx daemon is still running. Is there a way to dump its configuration to a config file that it'll understand later?",No explicit stack trace attached.,"You need a gdb installed to dump memory regions of running process. You should get something like ""Binary file mem_086cb000 matches"". Open this file in editor, search for config (e.g. ""worker_connections"" directive), copy&paste. Profit! Update: This method isn't entirely reliable. It's based on assumption that nginx process will read configuration and don't overwrite/reuse this memory area later. Master nginx process gives us best chances for that I guess.
+
+[Remediation Script / Config]:
+# Set pid of nginx master process here
+pid=8192
+
+# generate gdb commands from the process's memory mappings using awk
+cat /proc/$pid/maps | awk '$6 !~ ""^/"" {split ($1,addrs,""-""); print ""dump memory mem_"" addrs[1] "" 0x"" addrs[1] "" 0x"" addrs[2] ;}END{print ""quit""}' > gdb-commands
+
+# use gdb with the -x option to dump these memory regions to mem_* files
+gdb -p $pid -x gdb-commands
+
+# look for some (any) nginx.conf text
+grep worker_connections mem_*
+grep server_name mem_*",nginx,306
+IT-000038,serverfault,Web & Reverse Proxy,nginx url rewriting: difference between break and last,"I don't understand the difference between break and last (flags of rewrite). The documentation is rather abstruse. I've tried to switch between the two in some of my configs, but I couldn't spot any difference in behavior. Can someone please explain these flags in more detail? Preferably with an example that shows different behavior when flipping one flag to another.",No explicit stack trace attached.,"You may have different sets of rewrite rules for different locations. When rewrite module meets last , it stops processing the current set and the rewritten request is passed once again to find the appropriate location (and the new set of rewriting rules). If the rule ends with break , the rewriting also stops, but the rewritten request is not passed to another location. That is, if there are two locations: loc1 and loc2, and there's a rewriting rule in loc1 that changes loc1 to loc2 AND ends with last , the request will be rewritten and passed to location loc2. If the rule ends with break , it will belong to location loc1.","nginx, rewrite",236
+IT-000039,serverfault,Web & Reverse Proxy,How can I create a location in nginx that works with AND without a trailing slash?,"Right now I have this config: However, if I visit www.mysite.com/phpmyadmin (note the lack of trailing slash), it won't find what I'm looking for a 404. I assume because I don't include the trailing slash. How can I fix this?","location ~ ^/phpmyadmin/(.*)$
+{
+        alias /home/phpmyadmin/$1;
+}","It might be in the regular expression that you're using -- The above will match /phpmyadmin/, /phpmyadmin/anything/else/here, but it won't match /phpmyadmin because the regular expression includes the trailing slash. You probably want something like this: The question mark is a regular expression quantifier and should tell nginx to match zero or one of the previous character (the slash). Warning: The community seen this solution, as is, as a possible security risk
+
+[Remediation Script / Config]:
+location ~ ^/phpmyadmin/(.*)$
+---
+location ~ /phpmyadmin/?(.*)$ {
+    alias /home/phpmyadmin/$1;
+}",nginx,195
+IT-000040,serverfault,Web & Reverse Proxy,"Remove ""www"" and redirect to ""https"" with nginx","I want to create a rule in nginx that does two things: Removes the ""www."" from the request URI Redirects to ""https"" if the request URI is ""http"" There are plenty of examples of how to do each of those things individually, but I can't figure out a solution that does both correctly (i.e. doesn't create a redirect loop and handles all cases properly). It needs to handle all of these cases: These should all end up at https://example.com/path (#4) without looping. Any ideas?","1. http://www.example.com/path
+2. https://www.example.com/path
+3. http://example.com/path
+4. https://example.com/path","The best way to accomplish this is using three server blocks: one to redirect http to https, one to redirect the https www-name to no-www, and one to actually handle requests. The reason for using extra server blocks instead of ifs is that server selection is performed using a hash table, and is very fast. Using a server-level if means the if is run for every request, which is wasteful. Also, capturing the requested uri in the rewrite is wasteful, as nginx already has this information in the $uri and $request_uri variables (without and with query string, respectively).
+
+[Remediation Script / Config]:
+server {
+    server_name www.example.com example.com;
+    return 301 https://example.com$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    ssl_certificate /path/to/server.cert;
+    ssl_certificate_key /path/to/server.key;
+    server_name www.example.com;
+    return 301 https://example.com$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    ssl_certificate /path/to/server.cert;
+    ssl_certificate_key /path/to/server.key;
+    server_name example.com;
+
+    <locations for processing requests>
+}","nginx, ssl, https, rewrite",314
+IT-000041,serverfault,Web & Reverse Proxy,nginx: Log complete request / response with all headers?,"We have an application server that sometimes hangs. We suspect it is due to a bad request from a client. Can nginx log the complete request/response (like fiddler captures) to files, so we can see the requests that were sent before the hang? (We probably need to avoid pcap and that approach and do it all in nginx) If nginx is not the right tool for this, what (other than a network analyzer) might be?",No explicit stack trace attached.,"To get the request body sent by visitors, use client_body_in_file_only on; and log the ""temporary"" file it's written to in the logs by appending var $request_body_file to the log format. ""Temporary"" files will be located in client_temp directory by default. You can log request headers $http_<header> too and sent headers with $sent_http_<header> . If you have request body and headers you should be able to replay it and get the response your visitor had. Also something like gor should highly be considered so you could replay the traffic on an other environment where you could let nginx write these temporary files without causing IO issues in production (nginx won't purge them with on value that's why It's not that ""temporary"" in this case).",nginx,269
+IT-000042,serverfault,Web & Reverse Proxy,best way to debug nginx rewrite rules in config file?,"I have a bunch of rewrite rules that I have to port from apache to nginx. It's a rather painful process because I'm not able to see if my rewrite rules and ""if"" conditions are working as I want them to. Apache did have debugging for its rewrite module. Whats can I do for nginx?",No explicit stack trace attached.,"Enable rewrite_log : and set debug level in error_log directive:
+
+[Remediation Script / Config]:
+rewrite_log on;
+---
+error_log /var/log/nginx/localhost.error_log notice;","linux, apache-2.2, nginx, mod-rewrite, lamp",110
+IT-000043,serverfault,Web & Reverse Proxy,104: Connection reset by peer while reading response header from upstream (Nginx),"I have a server which was working ok until 3rd Oct 2013 at 10:50am when it began to intermittently return ""502 Bad Gateway"" errors to the client. Approximately 4 out of 5 browser requests succeed but about 1 in 5 fail with a 502. The nginx error log contains many hundreds of these errors; However the PHP error log does not contain any matching errors. Is there a way to get PHP to give me more info about why it is resetting the connection? This is nginx.conf ; And this is the .conf for this site;","2013/10/05 06:28:17 [error] 3111#0: *54528 recv() failed (104: Connection reset by peer) while reading response header from upstream, client: 66.249.66.75, server: www.bec-components.co.uk  request: """"GET /?_n=Fridgefreezer/Hotpoint/8591P;_i=x8078 HTTP/1.1"", upstream: ""fastcgi://127.0.0.1:9000"", host: ""www.bec-components.co.uk""
+---
+user              www-data;
+worker_processes  4;
+error_log         /var/log/nginx/error.log;
+pid               /var/run/nginx.pid;
+
+events {
+   worker_connections  1024;
+}
+
+http {
+  include          /etc/nginx/mime.types;
+  access_log       /var/log/nginx/access.log;
+
+  sendfile               on;
+  keepalive_timeout      30;
+  tcp_nodelay            on;
+  client_max_body_size   100m;
+
+  gzip         on;
+  gzip_types   text/plain application/xml text/javascript application/x-javascript text/css;
+  gzip_disable ""MSIE [1-6]\.(?!.*SV1)"";
+
+  include /gvol/sites/*/nginx.conf;
+
+}
+---
+server {
+
+  server_name   www.bec-components.co.uk bec3.uk.to bec4.uk.to bec.home;
+  root          /gvol/sites/bec/www/;
+  index         index.php index.html;
+
+  location ~ \.(js|css|png|jpg|jpeg|gif|ico)$ {
+    expires        2592000;   # 30 days
+    log_not_found  off;
+  }
+
+  ## Trigger client to download instead of display '.xml' files.
+  location ~ \.xml$ {
+    add_header Content-disposition ""attachment; filename=$1"";
+  }
+
+   location ~ \.php$ {
+      fastcgi_read_timeout  3600;
+      include               /etc/nginx/fastcgi_params;
+      keepalive_timeout     0;
+      fastcgi_param         SCRIPT_FILENAME  $document_root$fastcgi_script_name;
+      fastcgi_pass          127.0.0.1:9000;
+      fastcgi_index         index.php;
+   }
+}
+
+## bec-components.co.uk ##
+server {
+   server_name   bec-components.co.uk;
+   rewrite       ^/(.*) http://www.bec-components.co.uk$1 permanent;
+}","I'd always trust if my web servers are telling me 502 Bad Gateway . What is the uptime of your FastCGI/NGINX process? Do you monitor network connections? Can you confirm/deny a change of visitors count around that day? What the error means Your FastCGI process is not accessible by NGINX; either to slow or not corresponding at all. Bad gateway means that NGINX cannot complete the fastcgi_pass step to that defined resources listening on 127.0.0.1:9000 and at that very specific moment . Your inital error logs tells it all: From my limited point of view, I'd suggest: To restart your FastCGI process or server To check your access.log To enable enable debug.log
+
+[Remediation Script / Config]:
+recv() failed 
+    -> nginx failed
+
+(104: Connection reset by peer) while reading response header from upstream, 
+    -> no complete answer, or no answer at all
+upstream: ""fastcgi://127.0.0.1:9000"", 
+    -> who is he, who failed???","nginx, php, http",525
+IT-000044,serverfault,Web & Reverse Proxy,How do I change the NGINX user?,"I have a PHP script that creates a directory and outputs an image to the directory. This was working just fine under Apache but we recently decided to switch to NGINX to make more use of our limited RAM. I'm using the PHP mkdir() command to create the directory: After the switch to NGINX, I'm getting the following warning: I've already checked all the permissions of the parent directories, so I've determined that I probably need to change the NGINX or PHP-FPM 'user' but I'm not sure how to do that (I never had to specify user permissions for APACHE). I can't seem to find much information on this. Any help would be great! (Note: Besides this little hang-up, the switch to NGINX has been pretty seamless; I'm using it for the first time and it literally only took about 10 minutes to get up and running with NGINX. Now I'm just ironing out the kinks.)","mkdir(dirname($path['image']['server']), 0755, true);
+---
+Warning: mkdir(): Permission denied in ...","Run nginx & php-fpm as www:www ###1. Nginx Edit nginx.conf and set user to www www; : If the master process is run as root, then nginx will setuid()/setgid() to USER/GROUP. If GROUP is not specified, then nginx uses the same name as USER. By default it's nobody user and nobody or nogroup group or the --user=USER and --group=GROUP from the ./configure script. ###2. PHP-FPM Edit php-fpm.conf and set user and group to www : user - Unix user of processes. Default ""www-data"" group - Unix group of processes. Default ""www-data""
+
+[Remediation Script / Config]:
+user www www;
+---
+[www]
+user=www
+group=www","nginx, permissions",357
+IT-000045,serverfault,Web & Reverse Proxy,Is the PHP option 'cgi.fix_pathinfo' really dangerous with Nginx + PHP-FPM?,"There has been a lot of talking about a security issue relative to the cgi.fix_pathinfo PHP option used with Nginx (usually PHP-FPM, fast CGI). As a result, the default nginx configuration file used to say: However, now, the ""official"" Nginx wiki states that PATH_INFO can be handled correctly without disabling the above PHP option. So what? Questions Can you explain clearly what does cgi.fix_pathinfo do? ( official doc just says : ""For more information on PATH_INFO, see the CGI specs"") What will PHP really do with these PATH_INFO and SCRIPT_FILENAME variables? Why and how can it be dangerous with Nginx? ( detailed examples) Does the issue still exist in recent versions of these programs? Is Apache vulnerable? I'm trying to understand the issue at each step. For example, I don't understand why using the php-fpm Unix socket could avoid this problem.","# NOTE: You should have ""cgi.fix_pathinfo = 0;"" in php.ini","TL;DR - the fix (which you may not even need) is VERY SIMPLE and at the end of this answer. I'll try to address your specific questions, but your misunderstanding of what PATH_INFO is makes the questions themselves a little bit wrong. First question should be ""What is this path info business?"" Path info is stuff after the script in a URI (should start with a forward slash, but ends before the query arguments, which start with a ? ). The last paragraph in the overview section of the Wikipedia article about CGI sums it up nicely. Below the PATH_INFO is ""/THIS/IS/PATH/INFO"": http://example.com/path/to/script.php/THIS/IS/PATH/INFO?query_args=foo Your next question should have been: ""How does PHP determine what PATH_INFO and SCRIPT_FILENAME are?"" Earlier versions of PHP were naive and technically didn't even support PATH_INFO , so what was supposed to be PATH_INFO was munged onto SCRIPT_FILENAME which, yes, is broken in many cases. I don't have an old enough version of PHP to test with, but I believe it saw SCRIPT_FILENAME as the whole shebang: ""/path/to/script.php/THIS/IS/PATH/INFO"" in the above example (prefixed with the docroot as usual). With cgi.fix_pathinfo enabled, PHP now correctly finds ""/THIS/IS/PATH/INFO"" for the above example and puts it into PATH_INFO and SCRIPT_FILENAME gets just the part that points to the script being requested (prefixed with the docroot of course). Note: when PHP got around to actually supporting PATH_INFO , they had to add a configuration setting for the new feature so people running scripts that depended on the old behavior could run new PHP versions. That's why there's even a configuration switch for it. It should have been built-in (with the ""dangerous"" behavior) from the start. But how does PHP know what part is the script and what it path info? What if the URI is something like: http://example.com/path/to/script.php/THIS/IS/PATH/INFO.php?q=foo That can be a complex question in some environments. What happens in PHP is that it finds the first part of the URI path that does not correspond to anything under the server's docroot. For this example, it sees that on your server you don't have ""/docroot/path/to/script.php/THIS"" but you most certainly do have ""/docroot/path/to/script.php"" so now the SCRIPT_FILENAME has been determined and PATH_INFO gets the rest. So now the good example of the danger that is nicely detailed in the Nginx docs and in Hrvoje Špoljar's answer (you can't be fussy about such a clear example) becomes even more clear: given Hrvoje's example ("" http://example.com/foo.jpg/nonexistent.php ""), PHP sees a file on your docroot ""/foo.jpg"" but it does not see anything called ""/foo.jpg/nonexistent.php"" so SCRIPT_FILENAME gets ""/foo.jpg"" (again, prefixed with docroot) and PATH_INFO gets ""/nonexistent.php"". Why and how it can be dangerous should now be clear: The web server really isn't at fault - it's merely proxying the URI to PHP, which innocently finds that ""foo.jpg"" actually contains PHP content, so it executes it (now you've been pwned!). This is NOT particular to Nginx per se. The REAL problem is that you let untrusted content be uploaded somewhere without sanitizing and you allow other arbitrary requests to the same location, which PHP happily executes when it can. Nginx and Apache could be built or configured to prevent requests using this trickery, and there are plenty of examples for how to do that, including in user2372674's answer . This blog article explains the problem nicely, but it's missing the right solution. However, the best solution is to just make sure PHP-FPM is configured correctly so that it will never execute a file unless it ends with "".php"". It's worth noting that recent versions of PHP-FPM (~5.3.9+?) have this as default, so this danger isn't so much problem any more. The Solution If you have a recent version of PHP-FPM (~5.3.9+?), then you need to do nothing, as the safe behaviour below is already the default. Otherwise, find php-fpm's www.conf file (maybe /etc/php-fpm.d/www.conf , depends on your system). Make sure you have this: Again, that's default in many places these days. Note that this doesn't prevent an attacker from uploading a "".php"" file to a WordPress uploads folder and executing that using the same technique. You still need to have good security for your applications.
+
+[Remediation Script / Config]:
+security.limit_extensions = .php","nginx, security, php-fpm, fastcgi",1116
+IT-000046,serverfault,Web & Reverse Proxy,Suspicious symbols on nginx config,"I have the following nginx config, e.g. When I restart, it warn me: Any idea?","server {
+        listen   80;
+        server_name example.com
+        allow 127.0.0.0/8;
+---
+Restarting nginx: nginx: [warn] server name ""127.0.0.0/8"" has suspicious 
+symbols in /etc/nginx/sites-enabled/xxx","I guess you are missing the ; at the end of the server_name directive so it interprets the allow line as part of the server name.
+
+[Remediation Script / Config]:
+server {
+        listen   80;
+        server_name example.com;
+        allow 127.0.0.0/8;",nginx,102
+IT-000047,serverfault,Web & Reverse Proxy,How to use nginx to proxy to a host requiring authentication?,How can I setup an nginx proxy_pass directive that will also include HTTP Basic authentication information sent to the proxy host? This is an example of the URL I need to proxy to: The end goal is to allow 1 server present files from another server (the one we're proxying to) without exposing the URI of the proxy server. I have this working 90% correct now from following the Nginx config found here: http://kovyrin.net/2010/07/24/nginx-fu-x-accel-redirect-remote/ I just need to add in the HTTP Basic authentication to send to the proxy server,http://username:password@192.168.0.5/export?uuid=1234567890,"I got this working with alvosu's answer but I had to enter the word ""Basic"" inside the quotation of the base64 string so it looked like this:
+
+[Remediation Script / Config]:
+proxy_set_header Authorization ""Basic dGVzdHN0cmluZw=="";","nginx, proxy",178
+IT-000048,serverfault,Web & Reverse Proxy,nginx set variable in location,"I am trying to optimize my nginx configs, so it would be possible to set one variable, and all location paths would update automatically. I have four lines in question: What I would like to achieve is to set one variable (in this case 'php') and include it to config. However it seams that nginx ignores variables in this config. Am I doing something wrong or it is not possible to use variable in location paths?","server_name php.domain.com;
+root /srv/web/vhosts/php/web;
+error_log /srv/web/vhosts/php/logs/error.log;
+access_log /srv/web/vhosts/php/logs/access.log;
+---
+set $variable ""php"";
+server_name $variable.domain.com;
+root /srv/web/vhosts/$variable/web;
+error_log /srv/web/vhosts/$variable/logs/error.log;
+access_log /srv/web/vhosts/$variable/logs/access.log;","Variables can't be declared anywhere nor be used in any directive. As the documentation of set directive is : The immediate consequence is that you can't use custom variables in an http block. Update : after a discussion and experiments with AlexeyTen in this chatroom . access_log can contain variables with restrictions. Among them, the lack of buffering and the fact that the leading slash must not be declared in a variable . error_log won't work with variables at all. root directive can contains variables. server_name directive only allows strict $hostname value as a variable-like notation.
+
+[Remediation Script / Config]:
+Syntax:   set $variable value;
+Default:  —
+Context:  server, location, if",nginx,274
+IT-000049,serverfault,Web & Reverse Proxy,How can I configure nginx locations to share common configuration options?,How can i configure a shared config block for a set of locations? Now if i try to access /api/0.1/user then i will get 404 because it doesn´t pass the request to 127.0.0.1:9000,"location / {
+
+            proxy_pass        http://127.0.0.1:9000/;
+            proxy_redirect    off;
+            proxy_set_header  Host             $http_host;
+            proxy_set_header  X-Real-IP        $remote_addr;
+            proxy_set_header  X-Forwarded-For  $proxy_add_x_forwarded_for;
+
+            proxy_cache cache-test;
+            proxy_cache_valid 200 302 24h;
+            proxy_cache_valid 404 60s;
+            add_header X-Cache-Status $upstream_cache_status;
+
+    }
+
+
+    location /api/0.1/user{
+            proxy_cache_key /user/$http_authorization;
+    }","Create a common proxy config and include as-needed. /etc/nginx/api_proxy.conf Your Host Config File
+
+[Remediation Script / Config]:
+proxy_pass        http://127.0.0.1:9000/;
+proxy_redirect    off;
+proxy_set_header  Host             $http_host;
+proxy_set_header  X-Real-IP        $remote_addr;
+proxy_set_header  X-Forwarded-For  $proxy_add_x_forwarded_for;
+
+proxy_cache cache-test;
+proxy_cache_valid 200 302 24h;
+proxy_cache_valid 404 60s;
+add_header X-Cache-Status $upstream_cache_status;
+---
+...
+location /api/0.1/user {
+    include /etc/nginx/api_proxy.conf;
+    proxy_cache_key /user/$http_authorization;
+}
+...",nginx,170
+IT-000050,serverfault,Web & Reverse Proxy,Proxy HTTPS requests to a HTTP backend with NGINX,I have nginx configured to be my externally visible webserver which talks to a backend over HTTP. The scenario I want to achieve is: Client makes HTTP request to nginx which is redirect to the same URL but over HTTPS nginx proxies request over HTTP to the backend nginx receives response from backend over HTTP. nginx passes this back to the client over HTTPS My current config (where backend is configured correctly) is: My problem is the response to the client (step 4) is sent over HTTP not HTTPS. Any ideas?,"server {
+        listen       80;
+        server_name  localhost;
+
+        location ~ .* {
+            proxy_pass http://backend;
+            proxy_redirect http://backend https://$host;
+            proxy_set_header Host $host;
+            }
+        }","The type of proxy you are trying to set up is called a reverse proxy. A quick search for reverse proxy nginx got me this page: http://intranation.com/entries/2008/09/using-nginx-reverse-proxy/ Wayback machine archive copy In addition to adding some useful features like an X-Forwarded-For header (which will give your app visibility into the actual source IP), it specifically does: Good luck! :)
+
+[Remediation Script / Config]:
+proxy_redirect off","nginx, reverse-proxy, https",240

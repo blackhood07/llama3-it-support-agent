@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llama3-it-support-agent"
+version = "1.0.0"
+authors = [
+  { name = "Musharaf Maqbool", email = "musharraf3546@gmail.com" },
+]
+description = "Autonomous Level-3 SRE & IT Incident Triage Agent via Continuous Pre-Training and Response-Masked SFT on Meta-Llama-3.1-8B"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.2.0",
+    "transformers>=4.43.0",
+    "peft>=0.11.0",
+    "accelerate>=0.30.0",
+    "bitsandbytes>=0.43.1",
+    "datasets>=2.19.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/blackhood07/llama3-it-support-agent"
+"Bug Tracker" = "https://github.com/blackhood07/llama3-it-support-agent/issues"

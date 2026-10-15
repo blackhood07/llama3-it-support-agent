@@ -1,0 +1,45 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Large model binaries and weight checkpoints (>50MB)
+*.safetensors
+*.pt
+*.bin
+*.pth
+*.ckpt
+checkpoints/
+merged_production_model/
+final_it_support_production_model/
+final_adapter/
+offload/
+
+# Large datasets & raw files
+*.arrow
+*.zip
+*.tar.gz
+data/raw/
+data/processed/
+tokenized_cpt_dataset/
+tokenized_sft_dataset/
+drive_cpt_sft/
+kaggle_sft_bundle/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# IDE and OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db

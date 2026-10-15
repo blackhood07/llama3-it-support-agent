@@ -1,0 +1,12 @@
+{
+    "model_path": "/kaggle/input/notebooks/musharafmaqbool007/sft-kaggle/final_it_support_agent",
+    "evaluated_samples": 167,
+    "total_active_tokens": 38067,
+    "correct_tokens": 34138,
+    "sft_accuracy": 89.68,
+    "sft_val_loss": 0.3349,
+    "sft_val_perplexity": 1.4,
+    "cpt_accuracy_baseline": 73.12,
+    "cpt_perplexity_baseline": 2.81,
+    "gain_vs_cpt_pct": 16.56
+}
